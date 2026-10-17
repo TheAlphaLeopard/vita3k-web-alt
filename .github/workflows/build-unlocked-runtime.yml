@@ -16,14 +16,13 @@
 # UNRECOGNISED NIDs) stays unsupported on purpose, as upstream documents.
 #
 # How to use (no local toolchain needed):
-#   1. Fork https://github.com/notwindstone/vita3k-web
-#   2. In your fork, add this file as .github/workflows/build-unlocked-runtime.yml
-#      and the patch as unlock-kit/vita3k-web-hle-unlock.patch
-#      (replaces any older vita3k-web-sce-libc-unlock.patch; that one is
-#      obsolete — SceLibc.cpp is not part of the web runtime's HLE graph).
-#   3. Actions -> "HLE unlock build" -> Run workflow (takes a while; the
+#   1. This workflow lives in the source fork (TheAlphaLeopard/vita3k-web-alt)
+#      with the patches it applies beside it, in unlock-kit/:
+#      vita3k-web-hle-unlock.patch and gxm-video-texels.patch.
+#   2. Actions -> "HLE unlock build" -> Run workflow (takes a while; the
 #      project's own CI allows up to 4 hours)
-#   4. Download the artifact and copy its wasm64/ over wasm64/ in this site.
+#   3. Download the artifact and copy its wasm64/ over wasm64/ in the Pages
+#      repo (TheAlphaLeopard/vita3k-web) that serves this site.
 #
 # The build commands are the project's own (browser/pages/build.sh, the same
 # one the upstream Pages workflow runs). The mt runtime stages its modules
@@ -49,10 +48,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: notwindstone/vita3k-web
-          ref: main
-          fetch-depth: 1
+          # This fork itself (TheAlphaLeopard/vita3k-web-alt): it carries the
+          # C++ sources AND the unlock-kit patches. No repository/ref override:
+          # dispatch checks out this repository at its default branch tip.
+          # Checking out the upstream (notwindstone/vita3k-web) fails — that
+          # tree has no unlock-kit/, so git apply aborts with exit 128.
           submodules: recursive
+          fetch-depth: 1
 
       - name: Apply the HLE unlock patch
         run: |
