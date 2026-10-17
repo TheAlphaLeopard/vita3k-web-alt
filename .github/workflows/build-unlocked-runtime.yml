@@ -65,6 +65,12 @@ jobs:
           path: .cache/emscripten
           key: emscripten-${{ hashFiles('flake.lock') }}
 
+      - name: Apply the HLE unlock patch
+        run: |
+          git apply --check unlock-kit/vita3k-web-hle-unlock.patch
+          git apply unlock-kit/vita3k-web-hle-unlock.patch
+          git status --short
+
       - name: Build both runtimes (project build.sh)
         run: nix develop --command env VITA3K_BUILD_JOBS="$(nproc)" browser/pages/build.sh build/unlock build/unlock-site
 
