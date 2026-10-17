@@ -1,0 +1,42 @@
+diff --git a/browser/src/gxm_webgpu_bridge.cpp b/browser/src/gxm_webgpu_bridge.cpp
+index 9410f52..8d8d5f1 100644
+--- a/browser/src/gxm_webgpu_bridge.cpp
++++ b/browser/src/gxm_webgpu_bridge.cpp
+@@ -860,6 +860,11 @@ struct RenderedTarget {
+     // starts it, and the bridge's own writes of target texels (surface sync,
+     // transfers) move it past themselves.
+     uint32_t rendered_epoch = 0;
++    // The stamp of the previous render (the one this entry replaces): guest
++    // bytes newer than this but older than the current render were written
++    // between renders (e.g. a scorer decoding a video frame into the
++    // surface) and the re-render must not make its texels shadow them.
++    uint32_t prev_rendered_epoch = 0;
+     // Pass order: of two targets over the same memory, the later rendered.
+     uint64_t render_order = 0;
+ };
+@@ -1404,7 +1409,11 @@ static TargetMatch match_target(const MemState &mem, const SceGxmTexture &t, Add
+         ? (uint64_t(covered_height) - 1) * g.stride_px * g.pixel_bytes + uint64_t(covered_width) * g.pixel_bytes
+         : g.layout == Layout::Tiled ? uint64_t((covered_height + 31) / 32) * g.stride_px * 32 * g.pixel_bytes
+                                     : uint64_t(width) * height * g.pixel_bytes;
+-    if (mem_written_epoch(mem, address, span) >= target.rendered_epoch)
++    // Guest bytes rewritten since the previous completed render of this
++    // target are the ones a memory view must show; the stamp of the current
++    // in-flight render would outrank them (a decode that fills the surface
++    // between submits loses its frame otherwise).
++    if (mem_written_epoch(mem, address, span) >= target.prev_rendered_epoch)
+         return TargetMatch::Written;
+     // Alpha-one texels need a copy, so they never bind the target itself.
+     at = {base, x, y, !alpha_one && x == 0 && y == 0 && width == g.width && height == g.height, alpha_one};
+@@ -1780,8 +1789,11 @@ static void begin_pass(WebContext &ctx, scene::Writer &out) {
+     out.pass_first_draw = out.draws;
+     out.pass_open = true;
+     static uint64_t passes = 0;
+-    rendered_targets()[color.data.address()] = { ctx.geometry,
++    RenderedTarget &entry = rendered_targets()[color.data.address()];
++    const uint32_t previous_render = entry.rendered_epoch;
++    entry = { ctx.geometry,
+         static_cast<SceGxmColorBaseFormat>(color.colorFormat & SCE_GXM_COLOR_BASE_FORMAT_MASK), texture_cache().epoch, ++passes };
++    entry.prev_rendered_epoch = previous_render ? previous_render : entry.rendered_epoch;
+ }
+ 
+ // --- Draws -----------------------------------------------------------------
