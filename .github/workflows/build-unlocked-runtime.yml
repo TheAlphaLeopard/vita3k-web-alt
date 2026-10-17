@@ -1,0 +1,85 @@
+# HLE unlock build — produces the vita3k_web runtime pair with the
+# browser runtime's HLE allowlist extended to answer every NID the live
+# boot digests of this site recorded as unserviced for STEINS;GATE
+# (PCSE00644) and the Hollow Knight port (HKVT12222):
+#   - the NGS voice definitions the games hand into RackGetRequiredMemory-
+#     Size/RackInit (the INVALID_ARG wall that stopped the audio chain),
+#   - the CRI kernel-timer family, GXM cube-texture inits and back-face
+#     state setters, shader-patcher queries/teardown,
+#   - app-parameter / save-data quota+slots / trophy game info,
+#   - the save-data dialog continue/subclose pair, video decoder init,
+#     decoder-management bodies, screen-shot enable/overlay stubs,
+#   - LoadExec (cooperative app relaunch), camera setters, ctrl/motion
+#     queries, apputil mounts + safe memory and the offline-network joins.
+# Everything else (networking beyond the offline stack, message-pipe waits,
+# DisplayQueueFinish, k* driver stubs, the port's ~30 SDK-Internal
+# UNRECOGNISED NIDs) stays unsupported on purpose, as upstream documents.
+#
+# How to use (no local toolchain needed):
+#   1. Fork https://github.com/notwindstone/vita3k-web
+#   2. In your fork, add this file as .github/workflows/build-unlocked-runtime.yml
+#      and the patch as unlock-kit/vita3k-web-hle-unlock.patch
+#      (replaces any older vita3k-web-sce-libc-unlock.patch; that one is
+#      obsolete — SceLibc.cpp is not part of the web runtime's HLE graph).
+#   3. Actions -> "HLE unlock build" -> Run workflow (takes a while; the
+#      project's own CI allows up to 4 hours)
+#   4. Download the artifact and copy its wasm64/ over wasm64/ in this site.
+#
+# The build commands are the project's own (browser/pages/build.sh, the same
+# one the upstream Pages workflow runs). The mt runtime stages its modules
+# into the web64 dist, so one directory holds both pairs.
+
+name: HLE unlock build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unlock-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build the unlocked runtimes
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: notwindstone/vita3k-web
+          ref: main
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Apply the HLE unlock patch
+        run: |
+          set -euo pipefail
+          git apply --check unlock-kit/vita3k-web-hle-unlock.patch
+          git apply unlock-kit/vita3k-web-hle-unlock.patch
+          grep -n "sceNgsVoiceDefGetSimpleVoice" browser/runtime_hle.cmake
+          grep -n "sceKernelCreateTimer _sceKernelCreateTimer" browser/runtime_hle.cmake
+          grep -n "modules/SceScreenShot/SceScreenShot.cpp" browser/runtime_hle.cmake
+          grep -n "modules/SceSysmem/SceDebugLed.cpp" browser/runtime_hle.cmake
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build both runtimes (project build.sh)
+        run: nix develop --command env VITA3K_BUILD_JOBS="$(nproc)" browser/pages/build.sh build/unlock build/unlock-site
+
+      - name: Collect wasm64
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp -a build/unlock/web64/dist/wasm64 artifact/wasm64
+          ls -la artifact/wasm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vita3k-web-hle-unlocked-wasm64
+          path: artifact/wasm64
+          if-no-files-found: error
