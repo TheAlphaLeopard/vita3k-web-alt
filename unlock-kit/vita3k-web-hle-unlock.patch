@@ -1,0 +1,140 @@
+diff --git a/browser/runtime_hle.cmake b/browser/runtime_hle.cmake
+index c86a569..2c286ea 100644
+--- a/browser/runtime_hle.cmake
++++ b/browser/runtime_hle.cmake
+@@ -625,6 +625,117 @@ set(_hle_exports
+     sceNgsVoiceLockParams sceNgsVoicePatchSetVolumesMatrix sceNgsVoicePause sceNgsVoicePlay
+     sceNgsVoiceResume sceNgsVoiceSetModuleCallback sceNgsVoiceUnlockParams
+     sceVideodecInitLibraryWithUnmapMem sceVideodecQueryMemSize sceVideodecTermLibrary
++    # STEINS;GATE (PCSE00644 MaiDump) and the Hollow Knight port (HKVT12222)
++    # boot frontier (live unserviced-import digests of the AOT scans). NGS
++    # voice definitions beyond the four selected above: the titles hand the
++    # returned pointer into RackGetRequiredMemorySize/RackInit, which fails
++    # INVALID_ARG with null definitions and stops the audio/mixing chain.
++    # The remaining bodies are production (or upstream stubs whose return is
++    # the truth on this host) over already-sourced TUs; none waits on a host
++    # primitive, mirrors the selected Atrac9Voice/MasterBuss precedent.
++    sceNgsVoiceDefGetSimpleVoice
++    sceNgsVoiceDefGetMixerBuss sceNgsVoiceDefGetEqBuss sceNgsVoiceDefGetDelayBuss
++    sceNgsVoiceDefGetPitchShiftBuss sceNgsVoiceDefGetCompressorBuss
++    sceNgsVoiceDefGetDistortionBuss
++    sceNgsVoiceSetParamsBlock sceNgsSystemSetFlags
++    # Kernel timers the CRI SDK clocks everything with (create via the
++    # SceLibKernel wrapper, whose CALL_EXPORT dependency must be registered;
++    # start/stop/delete/query are SceThreadmgr production state writes).
++    sceKernelCreateTimer _sceKernelCreateTimer
++    sceKernelStartTimer sceKernelStopTimer sceKernelDeleteTimer
++    sceKernelGetTimerTimeWide
++    # Kern GPIO debug stubs (SceDebugLed.cpp, newly sourced).
++    sceKernelGetGPI sceKernelSetGPO
++    # GXM cube-texture inits (descriptor fill, same class as the selected
++    # Linear/Swizzled/Tiled inits).
++    sceGxmTextureInitCube sceGxmTextureInitCubeArbitrary
++    # App parameter / save-data / trophy frontiers of STEINS;GATE:
++    # the parameter pair is production (SFO query with the CALL_EXPORT
++    # dependency registered), the quota/slot-create are the io-backed
++    # save-data bodies beside the selected SlotDelete/SlotSetParam, and
++    # GetGameInfo is the local TRP-backed context read (same machinery as
++    # the selected GetTrophyUnlockState/UnlockTrophy).
++    sceAppMgrAppParamGetString _sceAppMgrAppParamGetString
++    sceAppUtilSaveDataGetQuota sceAppUtilSaveDataSlotCreate
++    sceNpTrophyGetGameInfo
++    # Load-exec front end (both names; the wrapper CALL_EXPORTs the twin):
++    # production relaunch via request_process_exit(AppLaunchRequest), the
++    # cooperative process-exit path; finding no self file fails the call.
++    sceAppMgrLoadExec _sceAppMgrLoadExec
++    # Save-data dialog continue/subclose: production common-dialog state
++    # machine bodies beside the selected Init/GetStatus/GetResult/Term.
++    sceSaveDataDialogContinue sceSaveDataDialogSubClose
++    # Video/AVC-decoder init and query (resource-table creation beside the
++    # selected WithUnmapMem twin); decoder-management bodies of libatrac9
++    # family not covered by the External variants (same create/decode
++    # machinery as the selected ones).
++    sceVideodecInitLibrary sceAvcdecDecodeAvailableSize
++    sceAudiodecCreateDecoder sceAudiodecDecodeNFrames sceAudiodecGetInternalError
++    sceAudiodecClearContext
++    # STEINS;GATE screenshot enable/overlay stubs (all-UNIMPLEMENTED TU, still
++    # compiles the selected bridge and answers the resolver; Enable/Disable
++    # return 0 like the selected cosmetic stubs).
++    sceScreenShotEnable sceScreenShotDisable sceScreenShotSetOverlayImage
++    # Hollow Knight AOT-scan frontier (live unserviced digests): remaining
++    # fixed-function back-face state setters (same state-write class as the
++    # selected front-face twins), vertex-texture slot, gamma tweak, the
++    # mid-scene flush command and shader-patcher queries/teardown the patcher
++    # refcount/mask-update bodies answer (the ForceUnregister spin-wait yields
++    # on compile_threads_on, which this single-fiber runtime never raises).
++    sceGxmSetTwoSidedEnable sceGxmSetBackDepthBias sceGxmSetBackDepthFunc
++    sceGxmSetBackDepthWriteEnable sceGxmSetBackStencilFunc sceGxmSetBackStencilRef
++    sceGxmSetWClampEnable sceGxmSetWClampValue
++    sceGxmSetVertexTexture sceGxmTextureSetGammaMode sceGxmMidSceneFlush
++    sceGxmShaderPatcherGetFragmentProgramRefCount
++    sceGxmShaderPatcherGetVertexProgramRefCount
++    sceGxmShaderPatcherGetHostMemAllocated
++    sceGxmShaderPatcherGetFragmentUsseMemAllocated
++    sceGxmShaderPatcherGetVertexUsseMemAllocated
++    sceGxmShaderPatcherForceUnregisterProgram
++    sceGxmShaderPatcherCreateMaskUpdateFragmentProgram
++    # Device mount/safe-memory/web stubs the port queries during setup:
++    # photo/music mounts without a device, the io-backed safe-memory
++    # config store, and the browser launch (UNIMPLEMENTED(): 0, the game
++    # proceeds without one).
++    sceAppUtilPhotoMount sceAppUtilPhotoUmount
++    sceAppUtilMusicMount sceAppUtilMusicUmount
++    sceAppUtilLoadSafeMemory sceAppUtilSaveSafeMemory
++    sceAppUtilLaunchWebBrowser
++    # Camera attribute setters (the Open/Close/Read/Start/Stop lifecycle is
++    # already selected; each setter validates and stores the value, logging
++    # UNIMPLEMENTED once; IsActive queries the same state).
++    sceCameraIsActive
++    sceCameraSetBrightness sceCameraSetContrast sceCameraSetEV
++    sceCameraSetExposureCeiling sceCameraSetISO sceCameraSetReverse
++    sceCameraSetAutoControlHold sceCameraSetNightmode sceCameraSetWhiteBalance
++    sceCameraSetAntiFlicker sceCameraSetEffect sceCameraSetSharpness
++    sceCameraSetSaturation sceCameraSetZoom sceCameraSetBacklight
++    # Controller metadata (PSTV-mode getters read config state only).
++    sceCtrlIsMultiControllerSupported sceCtrlGetWirelessControllerInfo
++    # Motion extras: the magnetometer trio answers 0/UNIMPLEMENTED like the
++    # selected stub class; SetAngleThreshold is the production validator
++    # beside the selected SetDeadband.
++    sceMotionMagnetometerOn sceMotionMagnetometerOff sceMotionGetMagnetometerState
++    sceMotionSetAngleThreshold
++    # Infobar (UNIMPLEMENTED(): 0; the browser page has no infobar).
++    sceAppMgrSetInfobarState
++    # Offline-network truth joins (the offline socket stack already covers
++    # recv-style parking): the listener pair over the offline socket state,
++    # the netstat debug query and the adhoc state/address fills report a
++    # Vita with no peers, which is exactly this host's truth.
++    sceNetAccept sceNetListen sceNetShowNetstat
++    sceNetCtlAdhocGetState sceNetCtlAdhocGetInAddr
++    # Deliberately NOT selected (recorded misses, with reasons):
++    # sceGxmDisplayQueueFinish (host wait_empty — the Balatro note above),
++    # sceNetResolverStartAton (production body strcpy's gethostbyaddr's
++    # result with no null check and depends on host DNS; unserviced keeps
++    # the calling thread stopped with a name instead of risking a crash),
++    # sceNetGetMacAddress (its __unix__ path sockets ioctls and asserts,
++    # without an Emscripten branch), sceShutterSoundPlay (one-stub module,
++    # cosmetic camera noise), sceNgsVoiceDefGetScreamVoiceAT9 (absent from
++    # nids.inc), ksceSblACMgrIsNonGameProgram/IsSystemProgram (no upstream
++    # EXPORT; the note above), and the ~30 UNRECOGNISED NIDs of the port's
++    # newer SDK (not in nids.inc; the memory-check would fail the build).
+ )
+ 
+ # Take NID values from the one authoritative database, never a second resolver.
+@@ -667,6 +778,8 @@ set(_hle_module_sources
+     "${_HLE_ROOT}/modules/SceKernelThreadMgr/SceThreadmgrCoredumpTime.cpp"
+     "${_HLE_ROOT}/modules/SceKernelThreadMgr/SceThreadmgrForDriver.cpp"
+     "${_HLE_ROOT}/modules/SceSysmem/SceSysmem.cpp"
++    # STEINS;GATE (PCSE00644): kern GPIO debug stubs live in SceDebugLed.cpp.
++    "${_HLE_ROOT}/modules/SceSysmem/SceDebugLed.cpp"
+     "${_HLE_ROOT}/modules/SceSysmem/SceSysclibForDriver.cpp"
+     "${_HLE_ROOT}/modules/SceSysmem/SceQafMgrForDriver.cpp"
+     "${_HLE_ROOT}/modules/SceSysmem/SceDebugForDriver.cpp"
+@@ -736,6 +849,8 @@ set(_hle_module_sources
+     "${_HLE_ROOT}/modules/SceAudiodec/SceAudiodecUser.cpp"
+     "${_HLE_ROOT}/modules/SceVideodec/SceVideodecUser.cpp"
+     "${_HLE_ROOT}/modules/SceCodecEngine/SceCodecEngineUser.cpp"
++    # STEINS;GATE: all-stub SceScreenShot TU (Enable/Disable/SetOverlayImage group below).
++    "${_HLE_ROOT}/modules/SceScreenShot/SceScreenShot.cpp"
+ )
+ # Compile the existing implementation files through registration-only adapters.
+ # This is necessary because EXPORT's make_bridge initialization roots even
