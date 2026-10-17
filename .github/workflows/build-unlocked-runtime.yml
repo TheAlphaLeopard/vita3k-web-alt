@@ -47,26 +47,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
+      # The fork's own tree: source + this workflow's unlock-kit patch.
+      # No repository override (checking out upstream instead was the bug
+      # that made the first run "can't open patch ...: No such file").
       - uses: actions/checkout@v4
         with:
-          repository: notwindstone/vita3k-web
-          ref: main
-          fetch-depth: 1
           submodules: recursive
-
-      - name: Apply the HLE unlock patch
-        run: |
-          set -euo pipefail
-          git apply --check unlock-kit/vita3k-web-hle-unlock.patch
-          git apply unlock-kit/vita3k-web-hle-unlock.patch
-          grep -n "sceNgsVoiceDefGetSimpleVoice" browser/runtime_hle.cmake
-          grep -n "sceKernelCreateTimer _sceKernelCreateTimer" browser/runtime_hle.cmake
-          grep -n "modules/SceScreenShot/SceScreenShot.cpp" browser/runtime_hle.cmake
-          grep -n "modules/SceSysmem/SceDebugLed.cpp" browser/runtime_hle.cmake
 
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+
+      # Same syscache as the project's own Pages workflow: Emscripten's
+      # system libraries for Memory64/pthreads take minutes to build.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/emscripten
+          key: emscripten-${{ hashFiles('flake.lock') }}
 
       - name: Build both runtimes (project build.sh)
         run: nix develop --command env VITA3K_BUILD_JOBS="$(nproc)" browser/pages/build.sh build/unlock build/unlock-site
