@@ -1,8 +1,24 @@
 diff --git a/browser/src/gxm_webgpu_bridge.cpp b/browser/src/gxm_webgpu_bridge.cpp
-index 9410f52..3e4f2f6 100644
+index 9410f52..939432c 100644
 --- a/browser/src/gxm_webgpu_bridge.cpp
 +++ b/browser/src/gxm_webgpu_bridge.cpp
-@@ -860,6 +860,11 @@ struct RenderedTarget {
+@@ -268,8 +268,14 @@ static bool gxm_tracing() {
+     return after >= 0 && trace_presents >= static_cast<unsigned long>(after) && trace_budget > 0;
+ }
+ #define GXM_TRACE(...) do { if (gxm_tracing()) { --trace_budget; std::printf("[gxm-trace] " __VA_ARGS__); } } while (0)
++// VITA3K_TEXTURE_VERIFY=0 restores the pure epoch gating: by default the
++// texture checks decide from the guest bytes themselves (a hash), because
++// bulk guest writes can miss the page epochs.
+ bool texture_verify() {
+-    static const bool enabled = std::getenv("VITA3K_TEXTURE_VERIFY") != nullptr;
++    static const bool enabled = [] {
++        const char *value = std::getenv("VITA3K_TEXTURE_VERIFY");
++        return !value || std::strcmp(value, "0") != 0;
++    }();
+     return enabled;
+ }
+ Timing &timing() {
+@@ -860,6 +866,11 @@ struct RenderedTarget {
      // starts it, and the bridge's own writes of target texels (surface sync,
      // transfers) move it past themselves.
      uint32_t rendered_epoch = 0;
@@ -14,7 +30,30 @@ index 9410f52..3e4f2f6 100644
      // Pass order: of two targets over the same memory, the later rendered.
      uint64_t render_order = 0;
  };
-@@ -1404,7 +1409,11 @@ static TargetMatch match_target(const MemState &mem, const SceGxmTexture &t, Add
+@@ -876,6 +887,14 @@ struct CachedTexture {
+     uint32_t checked_epoch = 0; // 0 = never checked
+     Address source = 0;
+     uint32_t footprint = 0;
++    // Binds over a rendered target: hash of the covered guest bytes, once
++    // per submission. Bulk guest writes (a video decode) can miss the page
++    // epochs; a moved hash serves the texture from memory after all.
++    uint64_t target_hash = 0;
++    bool target_seen = false; // hashed at least once
++    bool target_guest = false; // sampling the guest's own bytes, not the target
++    bool target_changed = false; // this submission's hash check found new bytes
++    uint32_t target_epoch = 0; // submission epoch of the last hash check
+ };
+ struct TextureCache {
+     std::unordered_map<uint64_t, CachedTexture> entries;
+@@ -1336,6 +1355,7 @@ struct TargetTexels {
+     uint32_t x = 0, y = 0;
+     bool whole = false;
+     bool alpha_one = false; // the texture reads the target's alpha as 1
++    uint64_t span = 0; // covered guest bytes, for hashing them
+ };
+ enum class TargetMatch { None, Mismatch, Written, Texels };
+ static TargetMatch match_target(const MemState &mem, const SceGxmTexture &t, Address base, const RenderedTarget &target,
+@@ -1404,10 +1424,14 @@ static TargetMatch match_target(const MemState &mem, const SceGxmTexture &t, Add
          ? (uint64_t(covered_height) - 1) * g.stride_px * g.pixel_bytes + uint64_t(covered_width) * g.pixel_bytes
          : g.layout == Layout::Tiled ? uint64_t((covered_height + 31) / 32) * g.stride_px * 32 * g.pixel_bytes
                                      : uint64_t(width) * height * g.pixel_bytes;
@@ -26,8 +65,90 @@ index 9410f52..3e4f2f6 100644
 +    if (mem_written_epoch(mem, address, span) >= target.prev_rendered_epoch)
          return TargetMatch::Written;
      // Alpha-one texels need a copy, so they never bind the target itself.
-     at = {base, x, y, !alpha_one && x == 0 && y == 0 && width == g.width && height == g.height, alpha_one};
-@@ -1780,8 +1789,12 @@ static void begin_pass(WebContext &ctx, scene::Writer &out) {
+-    at = {base, x, y, !alpha_one && x == 0 && y == 0 && width == g.width && height == g.height, alpha_one};
++    at = {base, x, y, !alpha_one && x == 0 && y == 0 && width == g.width && height == g.height, alpha_one, span};
+     return TargetMatch::Texels;
+ }
+ // Targets are never forgotten, so memory rendered long ago may lie under
+@@ -1508,6 +1532,15 @@ static bool bind_texture(MemState &mem, const SceGxmTexture &t, scene::Writer &o
+     bound.u = t.uaddr_mode;
+     bound.v = t.vaddr_mode;
+     bound.lod_max = std::max<uint32_t>(t.true_mip_count(), 1) - 1;
++    auto &cache = texture_cache();
++    // Identity of the guest image: address, format, size, layout and mips
++    // (sampler fields do not change the uploaded texels).
++    const uint32_t identity[7] = {address, uint32_t(gxm::get_format(t)), gxm::get_width(t), gxm::get_height(t),
++        uint32_t(t.texture_type()), t.true_mip_count(), strided ? uint32_t(gxm::get_stride_in_bytes(t)) : 0u};
++    auto &entry = cache.entries[XXH3_64bits(identity, sizeof(identity))];
++    if (!entry.id)
++        entry.id = cache.next_id++;
++    bound.id = entry.id;
+     TargetTexels at;
+     bool overlaps = false;
+     const bool in_target = texels_in_target(mem, t, at, overlaps);
+@@ -1515,24 +1548,49 @@ static bool bind_texture(MemState &mem, const SceGxmTexture &t, scene::Writer &o
+         uint32_t(gxm::get_format(t)), uint32_t(t.texture_type()), gxm::get_width(t), gxm::get_height(t),
+         in_target ? "texels" : overlaps ? "overlap" : "none", at.base, at.x, at.y, int(at.whole));
+     if (in_target) {
++        // A decoder writing the target's memory in bulk (a video frame) may
++        // leave no page-epoch trace, so the Written check above cannot rest
++        // on the epochs alone: hash the covered guest bytes once per
++        // submission. A hash that moved under the rendered target serves the
++        // guest's own bytes from here on, as the Written path would.
++        if (texture_verify()) {
++            if (entry.target_epoch != cache.epoch) {
++                entry.target_epoch = cache.epoch;
++                const uint64_t hash = XXH3_64bits(Ptr<const uint8_t>(address).get(mem), at.span);
++                entry.target_changed = entry.target_seen && hash != entry.target_hash;
++                if (entry.target_changed)
++                    entry.target_guest = true; // the target's texels were rewritten underneath
++                entry.target_hash = hash;
++                entry.target_seen = true;
++            }
++            if (entry.target_guest) {
++                // Sampling the guest's own bytes: decode the frames the
++                // epochs never reported (upload_texture counts them as
++                // untracked).
++                if (entry.target_changed) {
++                    const bool uploaded = upload_texture(mem, t, out, entry, true, why);
++                    entry.target_changed = false; // later binds keep this frame's texels
++                    if (uploaded)
++                        return true;
++                    entry.target_guest = false; // decode failed: back to the target
++                } else {
++                    return true; // the decoded texture holds this frame's bytes
++                }
++            }
++        }
+         bind_target_texels(t, at, out, bound);
+         return true;
+     }
+     if (overlaps && !surface_sync())
+         note_stale_texture(t);
+-    auto &cache = texture_cache();
+-    // Identity of the guest image: address, format, size, layout and mips
+-    // (sampler fields do not change the uploaded texels).
+-    const uint32_t identity[7] = {address, uint32_t(gxm::get_format(t)), gxm::get_width(t), gxm::get_height(t),
+-        uint32_t(t.texture_type()), t.true_mip_count(), strided ? uint32_t(gxm::get_stride_in_bytes(t)) : 0u};
+-    const uint64_t key = XXH3_64bits(identity, sizeof(identity));
+-    auto &entry = cache.entries[key];
+-    if (!entry.id)
+-        entry.id = cache.next_id++;
+-    bound.id = entry.id;
+-    const bool unwritten = entry.checked_epoch
++    const bool unwritten = entry.checked_epoch != 0
+         && mem_written_epoch(mem, entry.source, entry.footprint) < entry.checked_epoch;
+-    if (unwritten && !texture_verify()) {
++    // The page epochs only memoize the check within a submission: bulk
++    // guest writes (a video decode) can miss them, so the guest bytes
++    // themselves decide — upload_texture hashes the footprint and decodes
++    // only a change. With VITA3K_TEXTURE_VERIFY=0 the epochs gate alone,
++    // as before.
++    if (entry.checked_epoch == cache.epoch || (unwritten && !texture_verify())) {
+         ++timing().clean;
+         return true;
+     }
+@@ -1780,8 +1838,12 @@ static void begin_pass(WebContext &ctx, scene::Writer &out) {
      out.pass_first_draw = out.draws;
      out.pass_open = true;
      static uint64_t passes = 0;
